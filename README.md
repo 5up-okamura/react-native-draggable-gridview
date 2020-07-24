@@ -2,7 +2,7 @@
 
 A drag-and-drop-enabled GridView component for React Native.
 
-![React Native Draggable GridView Demo](./demo.gif)
+![React Native Draggable GridView Demo](https://github.com/5up-okamura/react-native-draggable-gridview/raw/master/demo.gif)
 
 ## Install
 

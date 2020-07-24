@@ -1,0 +1,12 @@
+# Logs
+*.log
+npm-debug.log
+
+# Dependency directory
+node_modules
+
+# Examples
+*/node_modules/**/*
+*/.expo/*
+*/.expo-shared/*
+demo.gif

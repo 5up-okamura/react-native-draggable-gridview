@@ -17,6 +17,10 @@
   ],
   "author": "Hiroshi Okamura",
   "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/5up-okamura/react-native-draggable-gridview/issues"
+  },
+  "homepage": "https://github.com/5up-okamura/react-native-draggable-gridview#readme",
   "main": "src/index.tsx",
   "repository": {
     "type": "git",
