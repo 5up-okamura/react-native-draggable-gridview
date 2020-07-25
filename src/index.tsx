@@ -9,7 +9,7 @@ import { Animated, Easing, EasingFunction } from 'react-native'
 import { ScrollView, ScrollViewProps, PanResponder } from 'react-native'
 import _ from 'lodash'
 
-const { width: screenWidth } = Dimensions.get('screen')
+const { width: screenWidth } = Dimensions.get('window')
 
 interface GridViewProps extends ScrollViewProps {
   numColumns?: number
