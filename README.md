@@ -19,7 +19,7 @@ npm install --save react-native-draggable-gridview
 | data                  | any[]                                      |                                                                       |
 | numColumns?           | number                                     | 1                                                                     |
 | containerMargin?      | ContainerMargin                            | {top:0, bottom:0, left:0, right:0}                                    |
-| width?                | number                                     | Dimensions.get('screen').width                                        |
+| width?                | number                                     | Dimensions.get('window').width                                        |
 | activeOpacity?        | number                                     | 0.5                                                                   |
 | delayLongPress?       | number                                     | 500                                                                   |
 | selectedStyle?        | ViewStyle                                  | {shadowColor:'#000', shadowRadius:8, shadowOpacity:0.2, elevation:10} |
