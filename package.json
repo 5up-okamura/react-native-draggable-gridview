@@ -1,6 +1,6 @@
 {
   "name": "react-native-draggable-gridview",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "A drag-and-drop-enabled GridView component for React Native.",
   "keywords": [
     "react-native",

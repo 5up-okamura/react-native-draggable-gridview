@@ -6,7 +6,5 @@ npm-debug.log
 node_modules
 
 # Examples
-*/node_modules/**/*
-*/.expo/*
-*/.expo-shared/*
+demo
 demo.gif
