@@ -2,11 +2,12 @@
  * react-native-draggable-gridview
  */
 
-import React, { memo, useRef, useState } from 'react'
+import React, { memo, useRef, useState, useCallback } from 'react'
 import { Dimensions, LayoutRectangle } from 'react-native'
 import { View, ViewStyle, TouchableOpacity } from 'react-native'
 import { Animated, Easing, EasingFunction } from 'react-native'
-import { ScrollView, ScrollViewProps, PanResponder } from 'react-native'
+import { ScrollView, ScrollViewProps } from 'react-native'
+import { PanResponder, PanResponderInstance } from 'react-native'
 import _ from 'lodash'
 
 const { width: screenWidth } = Dimensions.get('window')
@@ -65,11 +66,12 @@ interface State {
   cellSize?: number
   grid: Point[]
   items: Item[]
-  isAnimating: boolean
-  animationId?: number
+  animation?: Animated.CompositeAnimation
+  animationId?: number // Callback ID for requestAnimationFrame
   startPoint?: Point // Starting position when dragging
   startPointOffset?: number // Offset for the starting point for scrolling
   move?: number // The position for dragging
+  panResponder?: PanResponderInstance
 }
 
 const GridView = memo((props: GridViewProps) => {
@@ -106,12 +108,11 @@ const GridView = memo((props: GridViewProps) => {
     contentOffset: 0,
     grid: [],
     items: [],
-    isAnimating: false,
     startPointOffset: 0,
   }).current
 
   //-------------------------------------------------- Preparing
-  const prepare = () => {
+  const prepare = useCallback(() => {
     if (!data) return
     // console.log('[GridView] prepare')
     const diff = data.length - self.grid.length
@@ -124,9 +125,9 @@ const GridView = memo((props: GridViewProps) => {
     ) {
       onUpdateData()
     }
-  }
+  }, [data, selectedItem])
 
-  const onUpdateGrid = () => {
+  const onUpdateGrid = useCallback(() => {
     // console.log('[GridView] onUpdateGrid')
     const cellSize = (width - left - right) / numColumns
     self.cellSize = cellSize
@@ -139,95 +140,129 @@ const GridView = memo((props: GridViewProps) => {
     }
     self.grid = grid
     onUpdateData()
-  }
+  }, [data, selectedItem])
 
-  const onUpdateData = () => {
+  const onUpdateData = useCallback(() => {
     // console.log('[GridView] onUpdateData')
+
+    // Stop animation
+    stopAnimation()
+
     const { grid } = self
-    self.items = data.map((item, i) => ({
-      item,
-      pos: new Animated.ValueXY(grid[i]),
-      opacity: new Animated.Value(1),
-    }))
-  }
-
-  const prepareAnimations = (diff: number) => {
-    const config: AnimationConfig = rest.animationConfig || {
-      easing: Easing.ease,
-      duration: 300,
-      useNativeDriver: true,
-    }
-    let animations: Animated.CompositeAnimation[]
-
-    const grid0 = self.grid
-    const items0 = self.items
-    onUpdateGrid()
-    const { grid, items } = self
-
-    const diffItem: Item = _.head(
-      _.differenceWith(
-        diff < 0 ? items0 : items,
-        diff < 0 ? items : items0,
-        (v1: Item, v2: Item) => v1.item == v2.item
-      )
-    )
-    // console.log('[GridView] diffItem', diffItem)
-
-    animations = (diff < 0 ? items0 : items).reduce((prev, curr, i) => {
-      let toValue: { x: number; y: number }
-
-      if (diff < 0) {
-        // Delete
-        const index = _.findIndex(items, { item: curr.item })
-        toValue = index < 0 ? grid0[i] : grid[index]
-        if (index < 0) {
-          prev.push(Animated.timing(curr.opacity, { toValue: 0, ...config }))
-        }
-      } else {
-        // Add
-        const index = _.findIndex(items0, { item: curr.item })
-        if (index >= 0) curr.pos.setValue(grid0[index])
-        toValue = grid[i]
-        if (diffItem.item == curr.item) {
-          curr.opacity.setValue(0)
-          prev.push(Animated.timing(curr.opacity, { toValue: 1, ...config }))
-        }
+    self.items = data.map((item, i) => {
+      const pos = new Animated.ValueXY(grid[i])
+      const opacity = new Animated.Value(1)
+      const item0: Item = { item, pos, opacity }
+      // While dragging
+      if (selectedItem && selectedItem.item == item) {
+        const { x: x0, y: y0 } = selectedItem.pos
+        const x = x0['_value']
+        const y = y0['_value']
+        if (!self.animation) pos.setValue({ x, y })
+        selectedItem.item = item
+        selectedItem.pos = pos
+        selectedItem.opacity = opacity
+        self.startPoint = { x, y }
       }
-
-      // Animation for position
-      prev.push(Animated.timing(curr.pos, { toValue, ...config }))
-      return prev
-    }, [])
-
-    if (diff < 0) {
-      self.items = items0
-      self.grid = grid0
-    }
-
-    self.isAnimating = true
-    Animated.parallel(animations).start(() => {
-      // console.log('[Gird] end animation')
-      self.isAnimating = false
-      if (diff < 0) {
-        self.items = items
-        self.grid = grid
-        onEndDeleteAnimation && onEndDeleteAnimation(diffItem.item)
-      } else {
-        onEndAddAnimation && onEndAddAnimation(diffItem.item)
-      }
+      return item0
     })
-  }
+  }, [data, selectedItem])
+
+  const prepareAnimations = useCallback(
+    (diff: number) => {
+      const config = rest.animationConfig || {
+        easing: Easing.ease,
+        duration: 300,
+        useNativeDriver: true,
+      }
+
+      const grid0 = self.grid
+      const items0 = self.items
+      onUpdateGrid()
+      const { grid, items } = self
+
+      const diffItem: Item = _.head(
+        _.differenceWith(
+          diff < 0 ? items0 : items,
+          diff < 0 ? items : items0,
+          (v1: Item, v2: Item) => v1.item == v2.item
+        )
+      )
+      // console.log('[GridView] diffItem', diffItem)
+
+      const animations = (diff < 0 ? items0 : items).reduce((prev, curr, i) => {
+        // Ignore while dragging
+        if (selectedItem && curr.item == selectedItem.item) return prev
+
+        let toValue: { x: number; y: number }
+
+        if (diff < 0) {
+          // Delete
+          const index = _.findIndex(items, { item: curr.item })
+          toValue = index < 0 ? grid0[i] : grid[index]
+          if (index < 0) {
+            prev.push(Animated.timing(curr.opacity, { toValue: 0, ...config }))
+          }
+        } else {
+          // Add
+          const index = _.findIndex(items0, { item: curr.item })
+          if (index >= 0) curr.pos.setValue(grid0[index])
+          toValue = grid[i]
+          if (diffItem.item == curr.item) {
+            curr.opacity.setValue(0)
+            prev.push(Animated.timing(curr.opacity, { toValue: 1, ...config }))
+          }
+        }
+
+        // Animation for position
+        prev.push(Animated.timing(curr.pos, { toValue, ...config }))
+        return prev
+      }, [])
+
+      if (diff < 0) {
+        self.items = items0
+        self.grid = grid0
+      }
+
+      // Stop animation
+      stopAnimation()
+
+      self.animation = Animated.parallel(animations)
+      self.animation.start(() => {
+        // console.log('[Gird] end animation')
+        self.animation = undefined
+        if (diff < 0) {
+          self.items = items
+          self.grid = grid
+          onEndDeleteAnimation && onEndDeleteAnimation(diffItem.item)
+        } else {
+          onEndAddAnimation && onEndAddAnimation(diffItem.item)
+        }
+      })
+    },
+    [data, selectedItem]
+  )
+
+  const stopAnimation = useCallback(() => {
+    if (self.animation) {
+      self.animation.stop()
+      self.animation = undefined
+    }
+  }, [])
 
   prepare()
 
   //-------------------------------------------------- Handller
-  const onLayout = ({
-    nativeEvent: { layout },
-  }: {
-    nativeEvent: { layout: LayoutRectangle }
-  }) => (self.frame = layout)
+  const onLayout = useCallback(
+    ({
+      nativeEvent: { layout },
+    }: {
+      nativeEvent: { layout: LayoutRectangle }
+    }) => (self.frame = layout),
+    []
+  )
 
-  const animate = () => {
+  const animate = useCallback(() => {
     if (!selectedItem) return
 
     const { move, frame, cellSize } = self
@@ -241,84 +276,94 @@ const GridView = memo((props: GridViewProps) => {
     a && scroll((a / s) * 10) // scrolling
 
     self.animationId = requestAnimationFrame(animate)
-  }
+  }, [selectedItem])
 
-  const scroll = (offset: number) => {
-    const { scrollView, cellSize, numRows, frame, contentOffset } = self
-    const max = cellSize * numRows - frame.height + top + bottom
-    const offY = Math.max(0, Math.min(max, contentOffset + offset))
-    const diff = offY - contentOffset
-    if (Math.abs(diff) > 0.2) {
-      // Set offset for the starting point of dragging
-      self.startPointOffset += diff
-      // Move the dragging cell
-      const { x: x0, y: y0 } = selectedItem.pos
-      const x = x0['_value']
-      const y = y0['_value'] + diff
-      selectedItem.pos.setValue({ x, y })
-      reorder(x, y)
-      scrollView.scrollTo({ y: offY, animated: false })
-    }
-  }
-
-  const onScroll = ({
-    nativeEvent: {
-      contentOffset: { y },
+  const scroll = useCallback(
+    (offset: number) => {
+      const { scrollView, cellSize, numRows, frame, contentOffset } = self
+      const max = cellSize * numRows - frame.height + top + bottom
+      const offY = Math.max(0, Math.min(max, contentOffset + offset))
+      const diff = offY - contentOffset
+      if (Math.abs(diff) > 0.2) {
+        // Set offset for the starting point of dragging
+        self.startPointOffset += diff
+        // Move the dragging cell
+        const { x: x0, y: y0 } = selectedItem.pos
+        const x = x0['_value']
+        const y = y0['_value'] + diff
+        selectedItem.pos.setValue({ x, y })
+        reorder(x, y)
+        scrollView.scrollTo({ y: offY, animated: false })
+      }
     },
-  }: {
-    nativeEvent: { contentOffset: { y: number } }
-  }) => (self.contentOffset = y)
+    [selectedItem]
+  )
 
-  const onLongPress = (item: string, index: number, position: Point) => {
-    if (self.isAnimating) return
+  const onScroll = useCallback(
+    ({
+      nativeEvent: {
+        contentOffset: { y },
+      },
+    }: {
+      nativeEvent: { contentOffset: { y: number } }
+    }) => (self.contentOffset = y),
+    []
+  )
 
-    // console.log('[GridView] onLongPress', item, index)
-    self.startPoint = position
-    self.startPointOffset = 0
-    setSelectedItem(self.items[index])
-    onBeginDragging && onBeginDragging()
-  }
+  const onLongPress = useCallback(
+    (item: string, index: number, position: Point) => {
+      if (self.animation) return
 
-  const reorder = (x: number, y: number) => {
-    if (self.isAnimating) return
+      // console.log('[GridView] onLongPress', item, index)
+      self.startPoint = position
+      self.startPointOffset = 0
+      setSelectedItem(self.items[index])
+      onBeginDragging && onBeginDragging()
+    },
+    [onBeginDragging]
+  )
 
-    const { numRows, cellSize, grid, items } = self
+  const reorder = useCallback(
+    (x: number, y: number) => {
+      if (self.animation) return
 
-    let colum = Math.floor((x + cellSize / 2) / cellSize)
-    colum = Math.max(0, Math.min(numColumns, colum))
+      const { numRows, cellSize, grid, items } = self
 
-    let row = Math.floor((y + cellSize / 2) / cellSize)
-    row = Math.max(0, Math.min(numRows, row))
+      let colum = Math.floor((x + cellSize / 2) / cellSize)
+      colum = Math.max(0, Math.min(numColumns, colum))
 
-    const index = Math.min(items.length - 1, colum + row * numColumns)
-    const isLocked = locked && locked(items[index].item, index)
-    const dataIndex = items.indexOf(selectedItem)
+      let row = Math.floor((y + cellSize / 2) / cellSize)
+      row = Math.max(0, Math.min(numRows, row))
 
-    if (isLocked || dataIndex == index) return
+      const index = Math.min(items.length - 1, colum + row * numColumns)
+      const isLocked = locked && locked(items[index].item, index)
+      const itemIndex = _.findIndex(items, (v) => v.item == selectedItem.item)
 
-    swap(items, index, dataIndex)
-    self.isAnimating = true
+      if (isLocked || itemIndex == index) return
 
-    const animations = items.reduce((prev, curr, i) => {
-      index != i &&
-        prev.push(
-          Animated.timing(curr.pos, {
-            toValue: grid[i],
-            easing: Easing.ease,
-            duration: 200,
-            useNativeDriver: true,
-          })
-        )
-      return prev
-    }, [] as Animated.CompositeAnimation[])
+      swap(items, index, itemIndex)
 
-    Animated.parallel(animations).start(() => {
-      self.isAnimating = false
-    })
-  }
+      const animations = items.reduce((prev, curr, i) => {
+        index != i &&
+          prev.push(
+            Animated.timing(curr.pos, {
+              toValue: grid[i],
+              easing: Easing.ease,
+              duration: 200,
+              useNativeDriver: true,
+            })
+          )
+        return prev
+      }, [] as Animated.CompositeAnimation[])
+
+      self.animation = Animated.parallel(animations)
+      self.animation.start(() => (self.animation = undefined))
+    },
+    [selectedItem]
+  )
 
   //-------------------------------------------------- PanResponder
-  const onMoveShouldSetPanResponder = (): boolean => {
+  const onMoveShouldSetPanResponder = useCallback((): boolean => {
     if (!self.startPoint) return false
     const shoudSet = selectedItem != null
     if (shoudSet) {
@@ -326,109 +371,115 @@ const GridView = memo((props: GridViewProps) => {
       animate()
     }
     return shoudSet
-  }
+  }, [selectedItem])
 
-  const onMove = (
-    event,
-    { moveY, dx, dy }: { moveY: number; dx: number; dy: number }
-  ) => {
-    // console.log('[GridView] onMove', dx, dy, moveY)
-    const { startPoint, startPointOffset, frame } = self
-    self.move = moveY - frame.y
-    let { x, y } = startPoint
-    x += dx
-    y += dy + startPointOffset
-    selectedItem.pos.setValue({ x, y })
-    reorder(x, y)
-  }
+  const onMove = useCallback(
+    (event, { moveY, dx, dy }: { moveY: number; dx: number; dy: number }) => {
+      const { startPoint, startPointOffset, frame } = self
+      self.move = moveY - frame.y
+      let { x, y } = startPoint
+      // console.log('[GridView] onMove', dx, dy, moveY, x, y)
+      x += dx
+      y += dy + startPointOffset
+      selectedItem.pos.setValue({ x, y })
+      reorder(x, y)
+    },
+    [selectedItem]
+  )
 
-  const onRelease = () => {
+  const onRelease = useCallback(() => {
     if (!self.startPoint) return
     // console.log('[GridView] onRelease')
     cancelAnimationFrame(self.animationId)
     self.animationId = undefined
     self.startPoint = undefined
     const { grid, items } = self
-    const index = items.indexOf(selectedItem)
-    index >= 0 &&
+    const itemIndex = _.findIndex(items, (v) => v.item == selectedItem.item)
+    itemIndex >= 0 &&
       Animated.timing(selectedItem.pos, {
-        toValue: grid[index],
+        toValue: grid[itemIndex],
         easing: Easing.out(Easing.quad),
         duration: 200,
         useNativeDriver: true,
       }).start(onEndRelease)
-  }
+  }, [selectedItem])
 
-  const onEndRelease = () => {
+  const onEndRelease = useCallback(() => {
     // console.log('[GridView] onEndRelease')
     onReleaseCell && onReleaseCell(self.items.map((v) => v.item))
     setSelectedItem(undefined)
-  }
+  }, [onReleaseCell])
 
-  const panResponder = PanResponder.create({
-    onStartShouldSetPanResponder: () => true,
-    onStartShouldSetPanResponderCapture: () => false,
-    onMoveShouldSetPanResponder: onMoveShouldSetPanResponder,
-    onMoveShouldSetPanResponderCapture: onMoveShouldSetPanResponder,
-    onShouldBlockNativeResponder: () => false,
-    onPanResponderTerminationRequest: () => false,
-    onPanResponderMove: onMove,
-    onPanResponderRelease: onRelease,
-    onPanResponderEnd: onRelease,
-  })
+  //-------------------------------------------------- Render
+  const _renderItem = useCallback(
+    (value: Item, index: number) => {
+      // Update pan responder
+      if (index == 0) {
+        self.panResponder = PanResponder.create({
+          onStartShouldSetPanResponder: () => true,
+          onStartShouldSetPanResponderCapture: () => false,
+          onMoveShouldSetPanResponder: onMoveShouldSetPanResponder,
+          onMoveShouldSetPanResponderCapture: onMoveShouldSetPanResponder,
+          onShouldBlockNativeResponder: () => false,
+          onPanResponderTerminationRequest: () => false,
+          onPanResponderMove: onMove,
+          onPanResponderRelease: onRelease,
+          onPanResponderEnd: onRelease,
+        })
+      }
 
-  //-------------------------------------------------- 描画
-  const _renderItem = (value: Item, index: number) => {
-    const { item, pos, opacity } = value
-    // console.log('[GridView] renderItem', index, id)
-    const { cellSize, grid } = self
-    const p = grid[index]
-    const isLocked = locked && locked(item, index)
-    const key =
-      (keyExtractor && keyExtractor(item)) ||
-      (typeof item == 'string' ? item : `${index}`)
-    let style: ViewStyle = {
-      position: 'absolute',
-      width: cellSize,
-      height: cellSize,
-    }
+      const { item, pos, opacity } = value
+      // console.log('[GridView] renderItem', index, id)
+      const { cellSize, grid } = self
+      const p = grid[index]
+      const isLocked = locked && locked(item, index)
+      const key =
+        (keyExtractor && keyExtractor(item)) ||
+        (typeof item == 'string' ? item : `${index}`)
+      let style: ViewStyle = {
+        position: 'absolute',
+        width: cellSize,
+        height: cellSize,
+      }
 
-    if (!isLocked && value == selectedItem)
-      style = { zIndex: 1, ...style, ...selectedStyle }
+      if (!isLocked && selectedItem && value.item == selectedItem.item)
+        style = { zIndex: 1, ...style, ...selectedStyle }
 
-    return isLocked ? (
-      <View key={key} style={[style, { left: p.x, top: p.y }]}>
-        {renderLockedItem(item, index)}
-      </View>
-    ) : (
-      <Animated.View
-        {...panResponder.panHandlers}
-        key={key}
-        style={[
-          style,
-          {
-            transform: pos.getTranslateTransform(),
-            opacity,
-          },
-        ]}
-      >
-        <TouchableOpacity
-          style={{ flex: 1 }}
-          activeOpacity={activeOpacity}
-          delayLongPress={delayLongPress}
-          onLongPress={() => onLongPress(item, index, p)}
-          onPress={() => onPressCell && onPressCell(item, index)}
+      return isLocked ? (
+        <View key={key} style={[style, { left: p.x, top: p.y }]}>
+          {renderLockedItem(item, index)}
+        </View>
+      ) : (
+        <Animated.View
+          {...self.panResponder.panHandlers}
+          key={key}
+          style={[
+            style,
+            {
+              transform: pos.getTranslateTransform(),
+              opacity,
+            },
+          ]}
         >
-          {renderItem(item, index)}
-        </TouchableOpacity>
-      </Animated.View>
-    )
-  }
+          <TouchableOpacity
+            style={{ flex: 1 }}
+            activeOpacity={activeOpacity}
+            delayLongPress={delayLongPress}
+            onLongPress={() => onLongPress(item, index, p)}
+            onPress={() => onPressCell && onPressCell(item, index)}
+          >
+            {renderItem(item, index)}
+          </TouchableOpacity>
+        </Animated.View>
+      )
+    },
+    [selectedItem, renderLockedItem, renderItem]
+  )
 
   // console.log('[GridView] render', data.length)
   return (
     <ScrollView
-      // {...rest}
+      {...rest}
       ref={(ref) => (self.scrollView = ref)}
       onLayout={onLayout}
       onScroll={onScroll}
