@@ -395,13 +395,18 @@ const GridView = memo((props: GridViewProps) => {
     self.startPoint = undefined
     const { grid, items } = self
     const itemIndex = _.findIndex(items, (v) => v.item == selectedItem.item)
-    itemIndex >= 0 &&
+    if(itemIndex >= 0 ){
+      const _newPos = grid[itemIndex];
       Animated.timing(selectedItem.pos, {
-        toValue: grid[itemIndex],
+        toValue: _newPos,
         easing: Easing.out(Easing.quad),
         duration: 200,
         useNativeDriver: true,
-      }).start(onEndRelease)
+      }).start(() => {
+        items[itemIndex].pos.setValue({ x: _newPos.x, y: _newPos.y });
+        onEndRelease();
+      })
+    }
   }, [selectedItem])
 
   const onEndRelease = useCallback(() => {
@@ -429,7 +434,7 @@ const GridView = memo((props: GridViewProps) => {
       }
 
       const { item, pos, opacity } = value
-      // console.log('[GridView] renderItem', index, id)
+      // console.log('[GridView] renderItem', index, pos)
       const { cellSize, grid } = self
       const p = grid[index]
       const isLocked = locked && locked(item, index)
@@ -442,7 +447,8 @@ const GridView = memo((props: GridViewProps) => {
         height: cellSize,
       }
 
-      if (!isLocked && selectedItem && value.item == selectedItem.item)
+      const isSelected = selectedItem && value.item === selectedItem.item;
+      if (!isLocked && selectedItem && isSelected)
         style = { zIndex: 1, ...style, ...selectedStyle }
 
       return isLocked ? (
